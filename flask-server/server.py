@@ -41,9 +41,9 @@ app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAIL_SERVER"] = "smtp.gmail.com"
 app.config["MAIL_PORT"] = 587
 app.config["MAIL_USE_TLS"] = True
-app.config["MAIL_USERNAME"] = ""
-app.config["MAIL_PASSWORD"] = ""
-app.config["MAIL_DEFAULT_SENDER"] = ""
+app.config["MAIL_USERNAME"] = "deluxgemstore@gmail.com"
+app.config["MAIL_PASSWORD"] = "jrnc eviz hxpr vmyb"
+app.config["MAIL_DEFAULT_SENDER"] = "deluxgemstore@gmail.com"
 
 
 db = SQLAlchemy(app)

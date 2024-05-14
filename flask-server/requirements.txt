@@ -1,0 +1,13 @@
+-e .
+Flask
+flask_sqlalchemy
+flask_cors
+Werkzeug
+Flask-JWT-Extended
+PyJWT
+Flask-Mail
+itsdangerous
+Pillow
+numpy
+tensorflow
+phonenumbers
