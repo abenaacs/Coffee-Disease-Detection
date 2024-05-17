@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 import numpy as np
 import tensorflow as tf
 import os
+from dotenv import load_dotenv
 import uuid
 import re
 import phonenumbers
@@ -31,19 +32,20 @@ import datetime
 
 # configuration for coffee disease detection model
 UPLOAD_FOLDER = "uploads"
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///users.db"
-app.config["JWT_SECRET_KEY"] = "your-secret-key"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("SQLALCHEMY_DATABASE_URI")
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAIL_SERVER"] = "smtp.gmail.com"
-app.config["MAIL_PORT"] = 587
-app.config["MAIL_USE_TLS"] = True
-app.config["MAIL_USERNAME"] = ""
-app.config["MAIL_PASSWORD"] = ""
-app.config["MAIL_DEFAULT_SENDER"] = ""
+app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER")
+app.config["MAIL_PORT"] = os.getenv("MAIL_PORT")
+app.config["MAIL_USE_TLS"] = os.getenv("MAIL_USE_TLS")
+app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME")
+app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD")
+app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER")
 
 
 db = SQLAlchemy(app)
@@ -154,6 +156,7 @@ class Report(db.Model):
             "treatment": self.treatment,
         }
 
+
 # sample_diseases = [
 #     Disease(
 #         name="Early Blight",
@@ -185,6 +188,7 @@ def is_strong_password(password):
     # RegEx pattern for strong password validation
     pattern = r"^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
     return re.match(pattern, password) is not None
+
 
 def send_reset_email(user_email, token):
     reset_link = url_for("reset_password", token=token, _external=True)
@@ -240,31 +244,36 @@ def login():
         access_token = create_access_token(
             identity=user.id, additional_claims={"email": email}
         )
-        return jsonify({"access_token": access_token,
-            "user_id": user.id,
-            "email": user.email,
-            "firstName":user.firstName,
-            "lastName": user.lastName,
-            "phoneNumber":user.phoneNumber,
-            "zone": user.zone,
-            "region": user.region,
-            "occupation": user.occupation,
-                        })
+        return jsonify(
+            {
+                "access_token": access_token,
+                "user_id": user.id,
+                "email": user.email,
+                "firstName": user.firstName,
+                "lastName": user.lastName,
+                "phoneNumber": user.phoneNumber,
+                "zone": user.zone,
+                "region": user.region,
+                "occupation": user.occupation,
+            }
+        )
     return jsonify({"message": "Invalid username or password"}), 401
 
 
 @app.route("/forgot-password", methods=["POST"], endpoint="forgot_password")
 @jwt_required()
 def forgot_password():
+    user_id = get_jwt_identity()
     email = request.json["email"]
 
     if is_valid_email(email):
         existing_user = User.query.filter_by(email=email).first()
-        print(f"existing user: {existing_user.id}")
         if existing_user:
-            reset_token = create_access_token(identity=existing_user.id)
-            send_reset_email(email, reset_token)
-            return jsonify({"message": "Reset token has been sent to your email"})
+            if existing_user.id == user_id:
+                reset_token = create_access_token(identity=existing_user.id)
+                send_reset_email(email, reset_token)
+                return jsonify({"message": "Reset token has been sent to your email"})
+            return jsonify({"message": "Access denied"}), 403
         return jsonify({"message": "Invalid email address"}), 404
     return jsonify({"message": "Invalid form data"}), 400
 
@@ -292,7 +301,6 @@ def reset_password():
 
 
 @app.route("/users", methods=["GET"], endpoint="get_users")
-@jwt_required()
 def get_users():
     users = User.query.all()
     user_list = []
@@ -427,7 +435,7 @@ def coffee_detection():
                 user_id=user_id,
                 image_id=os.path.join(image_id + "_" + filename),
                 timestamp=current_time,
-                region = user.region,
+                region=user.region,
                 disease_name=predicted_class,
                 confidence=float(confidence),
                 description=disease.description,
@@ -443,7 +451,7 @@ def coffee_detection():
                 "disease_name": predicted_class,
                 "image_TimeStamp": current_time,
                 "confidence": float(confidence),
-                "region":user.region,
+                "region": user.region,
                 "description": disease.description,
                 "symptoms": disease.symptoms,
                 "treatment": disease.treatment,
