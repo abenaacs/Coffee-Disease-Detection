@@ -12,7 +12,6 @@ from flask_jwt_extended import (
 from jwt import InvalidTokenError
 from werkzeug.utils import secure_filename
 from flask_mail import Mail, Message
-from itsdangerous import URLSafeTimedSerializer
 from datetime import timedelta
 from io import BytesIO
 from PIL import Image
