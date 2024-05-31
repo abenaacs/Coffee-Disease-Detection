@@ -300,14 +300,9 @@ def login():
 
         # Create an array tos tore the results
         count_by_disease = []
-        epidemic = False
 
         #Iterate over the report counts and add them to the count_by_disease array
         for disease_name, count in report_disease_counts:
-
-            
-                
-
             result = {
                 "disease_name":disease_name,
                 "count": count,
@@ -326,6 +321,19 @@ def login():
             count_by_region.append(results)
 
 
+        # report_disease_counts = (
+        #     db.session.query(Report.region, Report.disease_name, func.count(Report.id))
+        #     .group_by(Report.region, Report.disease_name)
+        #     .all()
+        # )
+
+        #Dictionary to store the prevalence data
+        # prevalence_data ={}
+        # for region, disease_name, count in report_disease_counts:
+        #     if region not in prevalence_data:
+        #         prevalence_data[region] = []
+        #     prevalence_data[region].append({"disease_name":disease_name, "count":count})
+
         return (
             jsonify(
                 {
@@ -338,6 +346,7 @@ def login():
                     "zone": user.zone,
                     "region": user.region,
                     "occupation": user.occupation,
+                    # "prevalency per region":prevalence_data
                     "Total disease Report":report_count,
                     "Count by disease":count_by_disease,
                     "Count by region":count_by_region
