@@ -18,6 +18,7 @@ from PIL import Image
 from flask_cors import CORS
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import func
 
 import numpy as np
 import tensorflow as tf
@@ -45,7 +46,7 @@ app.config["MAIL_USE_TLS"] = os.getenv("MAIL_USE_TLS")
 app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME")
 app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD")
 app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER")
-
+# write a program
 
 db = SQLAlchemy(app)
 engine = create_engine(
@@ -131,6 +132,32 @@ class Disease(db.Model):
 
 
 class Report(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    image_id = db.Column(db.String(100), nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False)
+    region = db.Column(db.String(100))
+    confidence = db.Column(db.String(100), nullable=False)
+    disease_name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    symptoms = db.Column(db.Text, nullable=False)
+    treatment = db.Column(db.Text, nullable=False)
+
+    def to_dict(self):
+        return {
+            "user_id": self.user_id,
+            "image_id": self.image_id,
+            "disease_name": self.disease_name,
+            "image-timestamp": self.timestamp,
+            "region": self.region,
+            "confidence": self.confidence,
+            "description": self.description,
+            "symptoms": self.symptoms,
+            "treatment": self.treatment,
+        }
+
+
+class Notification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     image_id = db.Column(db.String(100), nullable=False)
@@ -243,18 +270,80 @@ def login():
         access_token = create_access_token(
             identity=user.id, additional_claims={"email": email}
         )
-        return jsonify(
-            {
-                "access_token": access_token,
-                "user_id": user.id,
-                "email": user.email,
-                "firstName": user.firstName,
-                "lastName": user.lastName,
-                "phoneNumber": user.phoneNumber,
-                "zone": user.zone,
-                "region": user.region,
-                "occupation": user.occupation,
+
+        #threshold value for disease prevalence measurement
+        threshold = 10
+        report_disease_counts = (
+            db.session.query(Report.disease_name, func.count(Report.disease_name))
+            .group_by(Report.disease_name)
+            .all()
+        )
+
+        # count_by_disease_exceeding_threshold = []
+        # for disease_name, count in report_disease_counts:
+
+        report_region_counts = (
+            db.session.query(Report.region, func.count(Report.region))
+            .group_by(Report.region)
+            .all()
+        )
+
+        # Get the total count of reports
+        report_count = Report.query.count()
+
+        # for disease_name, count in report_counts:
+        print(f"Number of reports for {report_disease_counts}")
+
+        # for disease_name, count in report_counts:
+        print(f"Number of reports for {report_region_counts}")
+
+
+        # Create an array tos tore the results
+        count_by_disease = []
+        epidemic = False
+
+        #Iterate over the report counts and add them to the count_by_disease array
+        for disease_name, count in report_disease_counts:
+
+            
+                
+
+            result = {
+                "disease_name":disease_name,
+                "count": count,
+                "epidemic":True if count>threshold else False
             }
+            count_by_disease.append(result)
+
+        #Iterate over the report counts and add them to the count_by_region array
+        count_by_region = []
+
+        for region, count in report_region_counts:
+            results = {
+                "region":region,
+                "count":count
+            }
+            count_by_region.append(results)
+
+
+        return (
+            jsonify(
+                {
+                    "access_token": access_token,
+                    "user_id": user.id,
+                    "email": user.email,
+                    "firstName": user.firstName,
+                    "lastName": user.lastName,
+                    "phoneNumber": user.phoneNumber,
+                    "zone": user.zone,
+                    "region": user.region,
+                    "occupation": user.occupation,
+                    "Total disease Report":report_count,
+                    "Count by disease":count_by_disease,
+                    "Count by region":count_by_region
+                }
+            ),
+            200,
         )
     return jsonify({"message": "Invalid username or password"}), 401
 
@@ -271,7 +360,10 @@ def forgot_password():
             if existing_user.id == user_id:
                 reset_token = create_access_token(identity=existing_user.id)
                 send_reset_email(email, reset_token)
-                return jsonify({"message": "Reset token has been sent to your email"})
+                return (
+                    jsonify({"message": "Reset token has been sent to your email"}),
+                    201,
+                )
             return jsonify({"message": "Access denied"}), 403
         return jsonify({"message": "Invalid email address"}), 404
     return jsonify({"message": "Invalid form data"}), 400
@@ -307,6 +399,7 @@ def get_users():
     for user in users:
         user_data = {}
         reports = Report.query.filter_by(user_id=user.id).all()
+        print(f"all reports{reports}")
         user_data["id"] = user.id
         user_data["firstName"] = user.firstName
         user_data["lastName"] = user.lastName
@@ -316,7 +409,7 @@ def get_users():
         user_data["occupation"] = user.occupation
         user_data["report"] = [report.to_dict() for report in reports]
         user_list.append(user_data)
-    return jsonify(user_list)
+    return jsonify(user_list), 200
 
 
 @app.route("/users/<int:user_id>", methods=["GET"], endpoint="get_user")
@@ -422,7 +515,7 @@ def coffee_detection():
         if predicted_class == "":
             return jsonify("Invalid Image"), 400
         if predicted_class == "healthy":
-            return jsonify("Healthy potato"), 201
+            return jsonify("Healthy potato"), 200
 
         else:
             # Fetch disease data from the database
@@ -455,7 +548,7 @@ def coffee_detection():
                 "symptoms": disease.symptoms,
                 "treatment": disease.treatment,
             }
-            return jsonify(response_data), 201
+            return jsonify(response_data), 200
 
 
 if __name__ == "__main__":
