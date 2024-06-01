@@ -61,6 +61,8 @@ CORS(app)
 MODEL = tf.keras.models.load_model("saved_models/cnn_model.keras")
 
 CLASS_NAMES = ["Early Blight", "Late Blight", "Healthy"]
+threshold = 10
+regional_threshold = 3
 
 
 class User(db.Model):
@@ -156,54 +158,6 @@ class Report(db.Model):
             "treatment": self.treatment,
         }
 
-
-class Notification(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    image_id = db.Column(db.String(100), nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False)
-    region = db.Column(db.String(100))
-    confidence = db.Column(db.String(100), nullable=False)
-    disease_name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text, nullable=False)
-    symptoms = db.Column(db.Text, nullable=False)
-    treatment = db.Column(db.Text, nullable=False)
-
-    def to_dict(self):
-        return {
-            "user_id": self.user_id,
-            "image_id": self.image_id,
-            "disease_name": self.disease_name,
-            "image-timestamp": self.timestamp,
-            "region": self.region,
-            "confidence": self.confidence,
-            "description": self.description,
-            "symptoms": self.symptoms,
-            "treatment": self.treatment,
-        }
-
-
-# sample_diseases = [
-#     Disease(
-#         name="Early Blight",
-#         description="Early blight is a common fungal disease that affects potatoes, caused by the pathogen Alternaria solani. It typically appears during warm and humid weather conditions.",
-#         symptoms="Dark brown to black lesions with concentric rings appear on the lower leaves of the potato plant.Lesions may have a target-like appearance with a dark center and lighter outer rings.As the disease progresses, the lesions may expand and affect more leaves, stems, and even the tubers.Infected tubers may develop shallow, dry, corky lesions that can rot during storage.",
-#         treatment="Cultural practices play a crucial role in managing early blight. Here are some recommended methods:Crop rotation: Avoid planting potatoes or related crops in the same location for consecutive years. Proper spacing: Maintain adequate spacing between plants to improve air circulation and reduce humidity. Timely planting: Plant early-maturing potato varieties to minimize the period of susceptibility to the disease.Sanitation: Remove and destroy infected plant debris to prevent the spread of spores.Fungicides: In severe cases, fungicides containing active ingredients such as chlorothalonil, mancozeb, or copper-based products may be applied following the manufacturer's instructions. However, it's important to note that fungicides should be used judiciously and in accordance with local regulations.",
-#     ),
-#     Disease(
-#         name="Late Blight",
-#         description="Late blight is a devastating fungal disease caused by the pathogen Phytophthora infestans, which can affect both potatoes and tomatoes. It thrives in cool and wet conditions.",
-#         symptoms="Initially, irregularly shaped, water-soaked lesions appear on the leaves, often starting from the tips.Lesions rapidly expand, turning brown or black and becoming surrounded by a pale green halo.In humid conditions, a whitish, fuzzy mold may develop on the underside of the leaves.Infected tubers show dark, firm lesions that can spread and cause rotting.",
-#         treatment="Prompt action is essential to manage late blight effectively. Consider the following treatment methods:Fungicides: Due to the severity and rapid spread of late blight, chemical control with fungicides is often necessary. Consult with local agricultural authorities or extension services for approved fungicides and recommended application schedules.Cultural practices: Similar to early blight, cultural practices play a vital role in managing late blight. These include crop rotation, proper spacing, and removal of infected plant material.Resistant varieties: Planting potato varieties that have some level of resistance to late blight can help minimize the disease's impact.",
-#     ),
-# ]
-# for disease in sample_diseases:
-#     db.session.add(disease)
-
-# # Commit the changes to the database
-# db.session.commit()
-
-
 def is_valid_email(email):
     # RegEx pattern for email validation
     pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
@@ -238,8 +192,11 @@ def create_user():
     occupation = request.json["occupation"]
 
     existing_user = User.query.filter_by(email=email).first()
+    existing_phone = User.query.filter_by(phoneNumber=phoneNumber).first()
     if existing_user:
         return jsonify({"message": "Username already exists"}), 400
+    if existing_phone:
+        return jsonify({"message": "Phone number already exists"}), 400
     if is_valid_email(email):
         if is_strong_password(password):
             new_user = User(
@@ -270,69 +227,25 @@ def login():
         access_token = create_access_token(
             identity=user.id, additional_claims={"email": email}
         )
-
-        #threshold value for disease prevalence measurement
-        threshold = 10
         report_disease_counts = (
-            db.session.query(Report.disease_name, func.count(Report.disease_name))
-            .group_by(Report.disease_name)
+            db.session.query(Report.region, Report.disease_name, func.count(Report.id))
+            .group_by(Report.region, Report.disease_name)
             .all()
         )
 
-        # count_by_disease_exceeding_threshold = []
-        # for disease_name, count in report_disease_counts:
-
-        report_region_counts = (
-            db.session.query(Report.region, func.count(Report.region))
-            .group_by(Report.region)
-            .all()
-        )
-
-        # Get the total count of reports
-        report_count = Report.query.count()
-
-        # for disease_name, count in report_counts:
-        print(f"Number of reports for {report_disease_counts}")
-
-        # for disease_name, count in report_counts:
-        print(f"Number of reports for {report_region_counts}")
-
-
-        # Create an array tos tore the results
-        count_by_disease = []
-
-        #Iterate over the report counts and add them to the count_by_disease array
-        for disease_name, count in report_disease_counts:
-            result = {
-                "disease_name":disease_name,
-                "count": count,
-                "epidemic":True if count>threshold else False
-            }
-            count_by_disease.append(result)
-
-        #Iterate over the report counts and add them to the count_by_region array
-        count_by_region = []
-
-        for region, count in report_region_counts:
-            results = {
-                "region":region,
-                "count":count
-            }
-            count_by_region.append(results)
-
-
-        # report_disease_counts = (
-        #     db.session.query(Report.region, Report.disease_name, func.count(Report.id))
-        #     .group_by(Report.region, Report.disease_name)
-        #     .all()
-        # )
-
-        #Dictionary to store the prevalence data
-        # prevalence_data ={}
-        # for region, disease_name, count in report_disease_counts:
-        #     if region not in prevalence_data:
-        #         prevalence_data[region] = []
-        #     prevalence_data[region].append({"disease_name":disease_name, "count":count})
+        # Dictionary to store the prevalence data
+        prevalence_data = []
+        for region, disease_name, count in report_disease_counts:
+            print(count)
+            if user.region == region and count > regional_threshold:
+                updates = {
+                    "disease_name": disease_name,
+                    "count": count,
+                    "epidemic": True,
+                }
+                prevalence_data.append(updates)
+            else:
+                continue
 
         return (
             jsonify(
@@ -346,10 +259,7 @@ def login():
                     "zone": user.zone,
                     "region": user.region,
                     "occupation": user.occupation,
-                    # "prevalency per region":prevalence_data
-                    "Total disease Report":report_count,
-                    "Count by disease":count_by_disease,
-                    "Count by region":count_by_region
+                    "Epidemic Disease": prevalence_data,
                 }
             ),
             200,
@@ -523,9 +433,6 @@ def coffee_detection():
         image_file.save(image_path)
         if predicted_class == "":
             return jsonify("Invalid Image"), 400
-        if predicted_class == "healthy":
-            return jsonify("Healthy potato"), 200
-
         else:
             # Fetch disease data from the database
             disease = Disease.query.filter_by(name=predicted_class).first()
@@ -560,7 +467,112 @@ def coffee_detection():
             return jsonify(response_data), 200
 
 
+@app.route(
+    "/researcher-page",
+    methods=["GET"],
+    endpoint="researcher-page",
+)
+@jwt_required()
+def researcher_page():
+    user_id = get_jwt_identity()
+
+    # user existence checking
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.occupation != "Researcher":
+        return jsonify({"unauthorized user"}), 403
+    else:
+        report_disease_counts = (
+            db.session.query(Report.disease_name, func.count(Report.disease_name))
+            .group_by(Report.disease_name)
+            .all()
+        )
+        # for disease_name, count in report_disease_counts:
+
+        report_region_counts = (
+            db.session.query(Report.region, func.count(Report.region))
+            .group_by(Report.region)
+            .all()
+        )
+
+        # Get the total count of reports
+        report_count = Report.query.count()
+
+        # Create an array tos tore the results
+        count_by_disease = []
+
+        # Iterate over the report counts and add them to the count_by_disease array
+        for disease_name, count in report_disease_counts:
+            result = {
+                "disease_name": disease_name,
+                "count": count,
+                "epidemic": True if count > threshold else False,
+            }
+            count_by_disease.append(result)
+
+        # Iterate over the report counts and add them to the count_by_region array
+        count_by_region = []
+
+        for region, count in report_region_counts:
+            results = {"region": region, "count": count}
+            count_by_region.append(results)
+
+        report_regional_disease_counts = (
+            db.session.query(Report.disease_name, Report.region, func.count(Report.id))
+            .group_by(Report.disease_name, Report.region)
+            .all()
+        )
+        print(f"reports regional disease {report_regional_disease_counts}")
+
+        # Dictionary to store the prevalence data
+        prevalence_data = {}
+        for disease_name, region, count in report_regional_disease_counts:
+            if disease_name not in prevalence_data:
+                prevalence_data[disease_name] = []
+            prevalence_data[disease_name].append({"region": region, "count": count}),
+
+        return (
+            jsonify(
+                {
+                    "Total disease Report": report_count,
+                    "Count by disease": count_by_disease,
+                    "Count by region": count_by_region,
+                    "prevalency per region": prevalence_data,
+                }
+            ),
+            200,
+        )
+
+
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
+        # with app.app_context():
+        #     sample_diseases = [
+        #                         Disease(
+        #                             name="Early Blight",
+        #                             description="Early blight is a common fungal disease that affects potatoes, caused by the pathogen Alternaria solani. It typically appears during warm and humid weather conditions.",
+        #                             symptoms="Dark brown to black lesions with concentric rings appear on the lower leaves of the potato plant.Lesions may have a target-like appearance with a dark center and lighter outer rings.As the disease progresses, the lesions may expand and affect more leaves, stems, and even the tubers.Infected tubers may develop shallow, dry, corky lesions that can rot during storage.",
+        #                             treatment="Cultural practices play a crucial role in managing early blight. Here are some recommended methods:Crop rotation: Avoid planting potatoes or related crops in the same location for consecutive years. Proper spacing: Maintain adequate spacing between plants to improve air circulation and reduce humidity. Timely planting: Plant early-maturing potato varieties to minimize the period of susceptibility to the disease.Sanitation: Remove and destroy infected plant debris to prevent the spread of spores.Fungicides: In severe cases, fungicides containing active ingredients such as chlorothalonil, mancozeb, or copper-based products may be applied following the manufacturer's instructions. However, it's important to note that fungicides should be used judiciously and in accordance with local regulations.",
+        #                         ),
+        #                         Disease(
+        #                             name="Late Blight",
+        #                             description="Late blight is a devastating fungal disease caused by the pathogen Phytophthora infestans, which can affect both potatoes and tomatoes. It thrives in cool and wet conditions.",
+        #                             symptoms="Initially, irregularly shaped, water-soaked lesions appear on the leaves, often starting from the tips.Lesions rapidly expand, turning brown or black and becoming surrounded by a pale green halo.In humid conditions, a whitish, fuzzy mold may develop on the underside of the leaves.Infected tubers show dark, firm lesions that can spread and cause rotting.",
+        #                             treatment="Prompt action is essential to manage late blight effectively. Consider the following treatment methods:Fungicides: Due to the severity and rapid spread of late blight, chemical control with fungicides is often necessary. Consult with local agricultural authorities or extension services for approved fungicides and recommended application schedules.Cultural practices: Similar to early blight, cultural practices play a vital role in managing late blight. These include crop rotation, proper spacing, and removal of infected plant material.Resistant varieties: Planting potato varieties that have some level of resistance to late blight can help minimize the disease's impact.",
+        #                         ),
+        #                         Disease(
+        #                             name = "Healthy",
+        #                             description="This plant is healthy coffee plant",
+        #                             symptoms = "No Symptoms",
+        #                             treatment = "None"
+        #                         )
+        #                     ]
+        #     for disease in sample_diseases:
+        #         db.session.add(disease)
+
+        #     # Commit the changes to the database
+        #     db.session.commit()
+
     app.run(debug=True)
