@@ -58,7 +58,7 @@ jwt = JWTManager(app)
 mail = Mail(app)
 CORS(app)
 
-MODEL = tf.keras.models.load_model("../saved_models/cnn_model.keras")
+MODEL = tf.keras.models.load_model("saved_models/cnn_model.keras")
 
 CLASS_NAMES = ["Early Blight", "Late Blight", "Healthy"]
 threshold = 10
