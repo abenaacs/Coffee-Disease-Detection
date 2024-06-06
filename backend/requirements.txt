@@ -6,6 +6,7 @@ Flask-JWT-Extended
 PyJWT
 Flask-Mail
 itsdangerous
+dotenv
 Pillow
 numpy
 tensorflow
