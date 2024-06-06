@@ -39,6 +39,7 @@ CORS(app)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("SQLALCHEMY_DATABASE_URI")
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)
+app.config["PORT"]  = os.getenv("PORT")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER")
 app.config["MAIL_PORT"] = os.getenv("MAIL_PORT")
