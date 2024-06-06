@@ -23,7 +23,7 @@ from sqlalchemy import func
 import numpy as np
 import tensorflow as tf
 import os
-# from dotenv import load_dotenv
+from dotenv import load_dotenv
 import uuid
 import re
 import phonenumbers
@@ -31,15 +31,15 @@ import datetime
 
 
 # configuration for coffee disease detection model
-# UPLOAD_FOLDER = "uploads"
-# load_dotenv()
+UPLOAD_FOLDER = "uploads"
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("SQLALCHEMY_DATABASE_URI")
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)
-# app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER")
 app.config["MAIL_PORT"] = os.getenv("MAIL_PORT")
 app.config["MAIL_USE_TLS"] = os.getenv("MAIL_USE_TLS")
@@ -426,11 +426,11 @@ def coffee_detection():
     else:
         image_id = str(uuid.uuid4())
         # saving image file
-        # filename = secure_filename(image_file.filename)
-        # image_path = os.path.join(
-        #     app.config["UPLOAD_FOLDER"], image_id + "_" + filename
-        # )
-        # image_file.save(image_path)
+        filename = secure_filename(image_file.filename)
+        image_path = os.path.join(
+            app.config["UPLOAD_FOLDER"], image_id + "_" + filename
+        )
+        image_file.save(image_path)
         if predicted_class == "":
             return jsonify("Invalid Image"), 400
         else:
@@ -441,7 +441,7 @@ def coffee_detection():
             # Create a new report instance
             report = Report(
                 user_id=user_id,
-                image_id=os.path.join(image_id),
+                image_id=os.path.join(image_id + "_" + filename),
                 timestamp=current_time,
                 region=user.region,
                 disease_name=predicted_class,
