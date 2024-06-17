@@ -19,7 +19,7 @@ from flask_cors import CORS
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import func
-
+from flask_bcrypt import Bcrypt
 import numpy as np
 import tensorflow as tf
 import os
@@ -39,7 +39,7 @@ CORS(app)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("SQLALCHEMY_DATABASE_URI")
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)
-app.config["PORT"]  = os.getenv("PORT")
+app.config["PORT"] = os.getenv("PORT")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER")
 app.config["MAIL_PORT"] = os.getenv("MAIL_PORT")
@@ -58,10 +58,12 @@ session = Session()
 jwt = JWTManager(app)
 mail = Mail(app)
 CORS(app)
-
-MODEL = tf.keras.models.load_model("saved_models/cnn_model.keras")
-
-CLASS_NAMES = ["Early Blight", "Late Blight", "Healthy"]
+bcrypt = Bcrypt(app)
+MODEL_PATH = "saved_models/coffee3.keras"
+MODEL = tf.keras.models.load_model(MODEL_PATH)
+AUTOENCODER_PATH = "autoencoder/autoencoder2.keras"
+AUTOENCODER = tf.keras.models.load_model(AUTOENCODER_PATH)
+CLASS_NAMES = ["Cerscospora", "Leaf rust", "Miner", "Phoma", "Healthy"]
 threshold = 10
 regional_threshold = 3
 
@@ -91,7 +93,7 @@ class User(db.Model):
         self.firstName = firstName
         self.lastName = lastName
         self.email = email
-        self.password = generate_password_hash(password)
+        self.password = password
         self.phoneNumber = self.validate_phone_number(phoneNumber)
         self.zone = zone
         self.region = region
@@ -140,7 +142,7 @@ class Report(db.Model):
     image_id = db.Column(db.String(100), nullable=False)
     timestamp = db.Column(db.DateTime, nullable=False)
     region = db.Column(db.String(100))
-    confidence = db.Column(db.String(100), nullable=False)
+    confidence = db.Column(db.Float, nullable=False)
     disease_name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text, nullable=False)
     symptoms = db.Column(db.Text, nullable=False)
@@ -158,6 +160,7 @@ class Report(db.Model):
             "symptoms": self.symptoms,
             "treatment": self.treatment,
         }
+
 
 def is_valid_email(email):
     # RegEx pattern for email validation
@@ -199,12 +202,13 @@ def create_user():
     if existing_phone:
         return jsonify({"message": "Phone number already exists"}), 400
     if is_valid_email(email):
+        hashed_password = bcrypt.generate_password_hash(password)
         if is_strong_password(password):
             new_user = User(
                 firstName,
                 lastName,
                 email,
-                password,
+                hashed_password,
                 phoneNumber,
                 zone,
                 region,
@@ -212,7 +216,7 @@ def create_user():
             )
             db.session.add(new_user)
             db.session.commit()
-            return jsonify({"message": "User created successfully"}), 200
+            return jsonify({"message": "User created successfully"}), 201
         else:
             return jsonify({"message": "Invalid Password"}), 400
     else:
@@ -224,7 +228,7 @@ def login():
     email = request.json["email"]
     password = request.json["password"]
     user = User.query.filter_by(email=email).first()
-    if user and check_password_hash(user.password, password):
+    if user and bcrypt.check_password_hash(user.password, password):
         access_token = create_access_token(
             identity=user.id, additional_claims={"email": email}
         )
@@ -320,7 +324,7 @@ def get_users():
         user_data = {}
         reports = Report.query.filter_by(user_id=user.id).all()
         print(f"all reports{reports}")
-        user_data["id"] = user.id
+        user_data["user_id"] = user.id
         user_data["firstName"] = user.firstName
         user_data["lastName"] = user.lastName
         user_data["phoneNumber"] = user.phoneNumber
@@ -342,7 +346,7 @@ def get_user(user_id):
     reports = Report.query.filter_by(user_id=user_id).all()
     if user:
         user_data = {}
-        user_data["id"] = user.id
+        user_data["user_id"] = user.id
         user_data["firstName"] = user.firstName
         user_data["lastName"] = user.lastName
         user_data["phoneNumber"] = user.phoneNumber
@@ -350,7 +354,7 @@ def get_user(user_id):
         user_data["region"] = user.region
         user_data["occupation"] = user.occupation
         user_data["report"] = [report.to_dict() for report in reports]
-        return jsonify(user_data), 201
+        return jsonify(user_data), 200
     return jsonify({"message": "User not found"}), 404
 
 
@@ -384,7 +388,7 @@ def delete_user(user_id):
     if user:
         db.session.delete(user)
         db.session.commit()
-        return jsonify({"message": "User deleted successfully"})
+        return jsonify({"message": "User deleted successfully"}), 201
     return jsonify({"message": "User not found"}), 404
 
 
@@ -410,62 +414,84 @@ def coffee_detection():
     if image_file.filename == "":
         return jsonify({"error": "Invalid image file"}), 400
     image_bytes = image_file.read()
-    image = Image.open(BytesIO(image_bytes))
-    image = image.resize((256, 256))
+    image_array = read_file_as_image(image_bytes)
+    img_batch = tf.expand_dims(image_array, 0)
 
-    image_array = np.array(image)
-    img_batch = np.expand_dims(image_array, 0)
-    predictions = MODEL.predict(img_batch)
-    predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
-    confidence = np.max(predictions[0])
-
-    # Anomaly detection threshold (adjust this value based on your requirements)
-    anomaly_threshold = 0.3
-
-    if confidence < anomaly_threshold:
-        return jsonify({"message": "No disease found"}), 200
+    if is_anomaly(img_batch):
+        return jsonify({"class": "Anomaly", "confidence": 0.0})
     else:
-        image_id = str(uuid.uuid4())
-        # saving image file
-        filename = secure_filename(image_file.filename)
-        image_path = os.path.join(
-            app.config["UPLOAD_FOLDER"], image_id + "_" + filename
+        image_id, filename = save_image(image_file)
+        predicted_class, confidence = predict_image_class(img_batch)
+
+        # Fetch disease data from the database
+        disease = Disease.query.filter_by(name=predicted_class).first()
+        current_time = datetime.datetime.now()
+
+        # Create a new report instance
+        report = Report(
+            user_id=user_id,
+            image_id=os.path.join(image_id + "_" + filename),
+            timestamp=current_time,
+            region=user.region,
+            disease_name=disease.name,
+            confidence=float(confidence),
+            description=disease.description,
+            symptoms=disease.symptoms,
+            treatment=disease.treatment,
         )
-        image_file.save(image_path)
-        if predicted_class == "":
-            return jsonify("Invalid Image"), 400
-        else:
-            # Fetch disease data from the database
-            disease = Disease.query.filter_by(name=predicted_class).first()
-            current_time = datetime.datetime.now()
 
-            # Create a new report instance
-            report = Report(
-                user_id=user_id,
-                image_id=os.path.join(image_id + "_" + filename),
-                timestamp=current_time,
-                region=user.region,
-                disease_name=predicted_class,
-                confidence=float(confidence),
-                description=disease.description,
-                symptoms=disease.symptoms,
-                treatment=disease.treatment,
-            )
+        # Add the report to the database
+        db.session.add(report)
+        db.session.commit()
 
-            # Add the report to the database
-            db.session.add(report)
-            db.session.commit()
+        response_data = {
+            "disease_name": disease.name,
+            "timeStamp": current_time,
+            "confidence": float(confidence),
+            "region": user.region,
+            "description": disease.description,
+            "symptoms": disease.symptoms,
+            "treatment": disease.treatment,
+        }
+        return jsonify(response_data), 200
 
-            response_data = {
-                "disease_name": predicted_class,
-                "image_TimeStamp": current_time,
-                "confidence": float(confidence),
-                "region": user.region,
-                "description": disease.description,
-                "symptoms": disease.symptoms,
-                "treatment": disease.treatment,
-            }
-            return jsonify(response_data), 200
+
+# Anomaly detection threshold
+def is_anomaly(img):
+    reconstructed_img = AUTOENCODER.predict(img)
+    reconstruction_error = tf.reduce_mean(tf.square(img - reconstructed_img))
+    anomaly_threshold = 0.009
+    return reconstruction_error > anomaly_threshold
+
+
+# Reading Image file
+def read_file_as_image(data) -> np.ndarray:
+    image = Image.open(BytesIO(data)).convert("RGB")
+    image = image.resize((128, 128))
+    imageArray = np.array(image) / 255.0
+    return imageArray
+
+
+# Predicting image class
+def predict_image_class(img):
+    # img_array = tf.expand_dims(img, 0)
+    predictions = MODEL.predict(img)
+    max_prob = np.max(predictions[0])
+    if max_prob >= 0.5:
+        predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
+        confidence = round(100 * max_prob, 2)
+        return predicted_class, confidence
+    else:
+        return jsonify("Anomaly", round(100 * max_prob, 2)), 200
+
+
+def save_image(image_file):
+    image_id = str(uuid.uuid4())
+    # saving image file
+    filename = secure_filename(image_file.filename)
+    image_path = os.path.join(app.config["UPLOAD_FOLDER"], image_id + "_" + filename)
+    image_file.save(image_path)
+    return image_id, filename
 
 
 @app.route(
@@ -524,7 +550,7 @@ def researcher_page():
             .group_by(Report.disease_name, Report.region)
             .all()
         )
-        print(f"reports regional disease {report_regional_disease_counts}")
+        # print(f"reports regional disease {report_regional_disease_counts}")
 
         # Dictionary to store the prevalence data
         prevalence_data = {}
@@ -552,16 +578,28 @@ if __name__ == "__main__":
         # with app.app_context():
         #     sample_diseases = [
         #                         Disease(
-        #                             name="Early Blight",
-        #                             description="Early blight is a common fungal disease that affects potatoes, caused by the pathogen Alternaria solani. It typically appears during warm and humid weather conditions.",
-        #                             symptoms="Dark brown to black lesions with concentric rings appear on the lower leaves of the potato plant.Lesions may have a target-like appearance with a dark center and lighter outer rings.As the disease progresses, the lesions may expand and affect more leaves, stems, and even the tubers.Infected tubers may develop shallow, dry, corky lesions that can rot during storage.",
-        #                             treatment="Cultural practices play a crucial role in managing early blight. Here are some recommended methods:Crop rotation: Avoid planting potatoes or related crops in the same location for consecutive years. Proper spacing: Maintain adequate spacing between plants to improve air circulation and reduce humidity. Timely planting: Plant early-maturing potato varieties to minimize the period of susceptibility to the disease.Sanitation: Remove and destroy infected plant debris to prevent the spread of spores.Fungicides: In severe cases, fungicides containing active ingredients such as chlorothalonil, mancozeb, or copper-based products may be applied following the manufacturer's instructions. However, it's important to note that fungicides should be used judiciously and in accordance with local regulations.",
+        #                             name="Cercospora",
+        #                             description="Cercospora is a fungal disease that affects coffee plants. It is caused by the fungus Cercospora coffeicola. The disease is commonly known as 'Cercospora leaf spot' or 'coffee leaf spot.'",
+        #                             symptoms="The disease primarily affects the leaves of the coffee plant. Initially, small yellow spots appear on the upper surface of the leaves. As the disease progresses, the spots enlarge and turn dark brown or black. The affected leaves may also develop a chlorotic halo around the spots. Severe infections can lead to premature defoliation of the coffee plant, reducing yields.",
+        #                             treatment="Managing Cercospora involves a combination of cultural and chemical control methods. Cultural practices include maintaining proper plant spacing, providing adequate shade, and promoting good air circulation. Regular pruning to remove infected leaves and debris helps reduce disease spread. Fungicides can be used to control severe infections, but their application should be based on expert advice to minimize resistance development.",
         #                         ),
         #                         Disease(
-        #                             name="Late Blight",
-        #                             description="Late blight is a devastating fungal disease caused by the pathogen Phytophthora infestans, which can affect both potatoes and tomatoes. It thrives in cool and wet conditions.",
-        #                             symptoms="Initially, irregularly shaped, water-soaked lesions appear on the leaves, often starting from the tips.Lesions rapidly expand, turning brown or black and becoming surrounded by a pale green halo.In humid conditions, a whitish, fuzzy mold may develop on the underside of the leaves.Infected tubers show dark, firm lesions that can spread and cause rotting.",
-        #                             treatment="Prompt action is essential to manage late blight effectively. Consider the following treatment methods:Fungicides: Due to the severity and rapid spread of late blight, chemical control with fungicides is often necessary. Consult with local agricultural authorities or extension services for approved fungicides and recommended application schedules.Cultural practices: Similar to early blight, cultural practices play a vital role in managing late blight. These include crop rotation, proper spacing, and removal of infected plant material.Resistant varieties: Planting potato varieties that have some level of resistance to late blight can help minimize the disease's impact.",
+        #                             name="Leaf Rust",
+        #                             description="Leaf rust, caused by the fungus Hemileia vastatrix, is one of the most devastating coffee diseases worldwide. It primarily affects the leaves of coffee plants.",
+        #                             symptoms="The disease manifests as small, yellow-orange powdery pustules on the undersides of the leaves. These pustules correspond to the fungal spore masses. As the infection progresses, the pustules turn dark brown or black. Infected leaves may eventually drop. Severe infections can lead to defoliation, reduced photosynthesis, and diminished yields.",
+        #                             treatment="Managing leaf rust involves a combination of cultural practices and fungicide applications. Cultural methods include planting resistant coffee varieties, maintaining appropriate shade, and practicing good sanitation by removing and destroying infected leaves. Fungicides can be applied preventively or curatively, but their use should be based on expert advice to prevent resistance development.",
+        #                         ),
+        #                         Disease(
+        #                             name="Miner",
+        #                             description="The coffee leaf miner is a small insect pest that affects coffee plants. It is the larval stage of the moth Leucoptera coffeella.",
+        #                             symptoms=" The coffee leaf miner larvae tunnel through the leaf tissues, creating serpentine mines. These mines appear as whitish or silverish trails on the leaves. Infested leaves may curl, turn yellow, and drop prematurely. Severe infestations can lead to reduced photosynthesis and decreased yields.",
+        #                             treatment="Integrated pest management (IPM) practices are commonly used to control coffee leaf miners. This involves a combination of cultural, biological, and chemical control methods. Cultural practices include maintaining good plant nutrition and hygiene, pruning affected branches, and destroying infested leaves. Biological control involves promoting natural enemies of the leaf miner, such as parasitic wasps. Insecticides can be used if necessary, but their application should follow sustainable practices and be based on expert advice.",
+        #                         ),
+        #                          Disease(
+        #                             name = "Phoma",
+        #                             description="Phoma is a fungal disease that affects coffee plants. It is caused by various species of the Phoma genus, such as Phoma exigua var. exigua and Phoma destructiva.",
+        #                             symptoms = "Phoma infections primarily affect the fruits (cherries) of coffee plants. Infected cherries develop dark brown to black lesions. The lesions may become sunken and may exude a sticky, gelatinous substance. Severely affected cherries can shrivel and drop prematurely. Phoma can also infect stems and leaves, causing dark brown lesions.",
+        #                             treatment = "Managing Phoma involves cultural practices and the use of fungicides. Cultural practices include maintaining proper plant nutrition, removing and destroying infected cherries, and promoting good air circulation. Fungicides can be used to control severe infections, but their application should be based on expert advice to minimize resistance development."
         #                         ),
         #                         Disease(
         #                             name = "Healthy",

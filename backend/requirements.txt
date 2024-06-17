@@ -1,14 +1,31 @@
-Flask
-flask_sqlalchemy
-flask_cors
-Werkzeug
-Flask-JWT-Extended
-PyJWT
-Flask-Mail
-itsdangerous
-python-dotenv
-Pillow
-numpy
-tensorflow
-keras
-phonenumbers
+# Flask
+# flask_sqlalchemy
+# flask_cors
+# Werkzeug
+# Flask-JWT-Extended
+# PyJWT
+# Flask-Mail
+# itsdangerous
+# python-dotenv
+# Pillow
+# numpy
+# tensorflow
+# keras
+# phonenumbers
+
+Flask==2.1.0
+Flask-SQLAlchemy==2.5.1
+Flask-CORS==3.0.10
+Werkzeug==2.1.0
+Flask-JWT-Extended==4.3.1
+PyJWT==2.1.0
+Flask-Mail==0.9.1
+SQLAlchemy==1.4.32
+Pillow==8.4.0
+numpy>=1.23.5
+tensorflow==2.16.0rc0
+# tensorflow==2.14.0
+keras==3.0.0
+ml_dtypes==0.3.1
+python-dotenv==0.19.2
+phonenumbers==8.12.44
