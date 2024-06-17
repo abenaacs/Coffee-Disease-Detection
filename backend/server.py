@@ -74,7 +74,7 @@ class User(db.Model):
     lastName = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
     password = db.Column(db.String(100), nullable=False)
-    phoneNumber = db.Column(db.Integer, unique=True, nullable=False)
+    phoneNumber = db.Column(db.String(13), unique=True, nullable=False)
     zone = db.Column(db.String(100))
     region = db.Column(db.String(100))
     occupation = db.Column(db.String(100))
@@ -153,7 +153,7 @@ class Report(db.Model):
             "user_id": self.user_id,
             "image_id": self.image_id,
             "disease_name": self.disease_name,
-            "image-timestamp": self.timestamp,
+            "timestamp": self.timestamp,
             "region": self.region,
             "confidence": self.confidence,
             "description": self.description,
@@ -260,7 +260,7 @@ def login():
                     "email": user.email,
                     "firstName": user.firstName,
                     "lastName": user.lastName,
-                    "phoneNumber": user.phoneNumber,
+                    "phoneNumber": str(user.phoneNumber),
                     "zone": user.zone,
                     "region": user.region,
                     "occupation": user.occupation,
@@ -344,6 +344,7 @@ def get_user(user_id):
         return jsonify({"message": "Access denied"}), 403
     user = User.query.get(user_id)
     reports = Report.query.filter_by(user_id=user_id).all()
+    print(reports)
     if user:
         user_data = {}
         user_data["user_id"] = user.id
@@ -446,8 +447,8 @@ def coffee_detection():
 
         response_data = {
             "disease_name": disease.name,
-            "timeStamp": current_time,
-            "confidence": float(confidence),
+            "timestamp": current_time,
+            "confidence": str(confidence),
             "region": user.region,
             "description": disease.description,
             "symptoms": disease.symptoms,
@@ -575,43 +576,5 @@ def researcher_page():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-        # with app.app_context():
-        #     sample_diseases = [
-        #                         Disease(
-        #                             name="Cercospora",
-        #                             description="Cercospora is a fungal disease that affects coffee plants. It is caused by the fungus Cercospora coffeicola. The disease is commonly known as 'Cercospora leaf spot' or 'coffee leaf spot.'",
-        #                             symptoms="The disease primarily affects the leaves of the coffee plant. Initially, small yellow spots appear on the upper surface of the leaves. As the disease progresses, the spots enlarge and turn dark brown or black. The affected leaves may also develop a chlorotic halo around the spots. Severe infections can lead to premature defoliation of the coffee plant, reducing yields.",
-        #                             treatment="Managing Cercospora involves a combination of cultural and chemical control methods. Cultural practices include maintaining proper plant spacing, providing adequate shade, and promoting good air circulation. Regular pruning to remove infected leaves and debris helps reduce disease spread. Fungicides can be used to control severe infections, but their application should be based on expert advice to minimize resistance development.",
-        #                         ),
-        #                         Disease(
-        #                             name="Leaf Rust",
-        #                             description="Leaf rust, caused by the fungus Hemileia vastatrix, is one of the most devastating coffee diseases worldwide. It primarily affects the leaves of coffee plants.",
-        #                             symptoms="The disease manifests as small, yellow-orange powdery pustules on the undersides of the leaves. These pustules correspond to the fungal spore masses. As the infection progresses, the pustules turn dark brown or black. Infected leaves may eventually drop. Severe infections can lead to defoliation, reduced photosynthesis, and diminished yields.",
-        #                             treatment="Managing leaf rust involves a combination of cultural practices and fungicide applications. Cultural methods include planting resistant coffee varieties, maintaining appropriate shade, and practicing good sanitation by removing and destroying infected leaves. Fungicides can be applied preventively or curatively, but their use should be based on expert advice to prevent resistance development.",
-        #                         ),
-        #                         Disease(
-        #                             name="Miner",
-        #                             description="The coffee leaf miner is a small insect pest that affects coffee plants. It is the larval stage of the moth Leucoptera coffeella.",
-        #                             symptoms=" The coffee leaf miner larvae tunnel through the leaf tissues, creating serpentine mines. These mines appear as whitish or silverish trails on the leaves. Infested leaves may curl, turn yellow, and drop prematurely. Severe infestations can lead to reduced photosynthesis and decreased yields.",
-        #                             treatment="Integrated pest management (IPM) practices are commonly used to control coffee leaf miners. This involves a combination of cultural, biological, and chemical control methods. Cultural practices include maintaining good plant nutrition and hygiene, pruning affected branches, and destroying infested leaves. Biological control involves promoting natural enemies of the leaf miner, such as parasitic wasps. Insecticides can be used if necessary, but their application should follow sustainable practices and be based on expert advice.",
-        #                         ),
-        #                          Disease(
-        #                             name = "Phoma",
-        #                             description="Phoma is a fungal disease that affects coffee plants. It is caused by various species of the Phoma genus, such as Phoma exigua var. exigua and Phoma destructiva.",
-        #                             symptoms = "Phoma infections primarily affect the fruits (cherries) of coffee plants. Infected cherries develop dark brown to black lesions. The lesions may become sunken and may exude a sticky, gelatinous substance. Severely affected cherries can shrivel and drop prematurely. Phoma can also infect stems and leaves, causing dark brown lesions.",
-        #                             treatment = "Managing Phoma involves cultural practices and the use of fungicides. Cultural practices include maintaining proper plant nutrition, removing and destroying infected cherries, and promoting good air circulation. Fungicides can be used to control severe infections, but their application should be based on expert advice to minimize resistance development."
-        #                         ),
-        #                         Disease(
-        #                             name = "Healthy",
-        #                             description="This plant is healthy coffee plant",
-        #                             symptoms = "No Symptoms",
-        #                             treatment = "None"
-        #                         )
-        #                     ]
-        #     for disease in sample_diseases:
-        #         db.session.add(disease)
-
-        #     # Commit the changes to the database
-        #     db.session.commit()
 
     app.run(debug=True)
