@@ -1,18 +1,16 @@
-from flask import Flask, request, jsonify, url_for
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import (
     JWTManager,
     create_access_token,
     jwt_required,
     get_jwt_identity,
-    decode_token,
 )
-from jwt import InvalidTokenError
 from werkzeug.utils import secure_filename
 from flask_mail import Mail, Message
-from datetime import timedelta
+
+# from datetime import timedelta
 from io import BytesIO
 from PIL import Image
 from flask_cors import CORS
@@ -26,8 +24,9 @@ import os
 from dotenv import load_dotenv
 import uuid
 import re
+import random
 import phonenumbers
-import datetime
+from datetime import datetime, timedelta
 
 
 # configuration for coffee disease detection model
@@ -52,7 +51,7 @@ app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER")
 db = SQLAlchemy(app)
 engine = create_engine(
     "sqlite:///users.db"
-)  # Replace 'your_database_url' with the actual URL of your database
+)
 Session = sessionmaker(bind=engine)
 session = Session()
 jwt = JWTManager(app)
@@ -112,14 +111,16 @@ class User(db.Model):
             raise ValueError("Invalid phone number")
 
 
-class PasswordResetToken(db.Model):
+class PasswordResetCode(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    token = db.Column(db.String(32), unique=True, nullable=False)
+    code = db.Column(db.String(6), unique=True, nullable=False)
     expiration = db.Column(db.DateTime, nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    user = db.relationship(
-        "User", backref=db.backref("password_reset_token", uselist=False)
-    )
+
+    def __init__(self, code, expiration, user_id):
+        self.code = code
+        self.expiration = expiration
+        self.user_id = user_id
 
 
 class Disease(db.Model):
@@ -142,7 +143,7 @@ class Report(db.Model):
     image_id = db.Column(db.String(100), nullable=False)
     timestamp = db.Column(db.DateTime, nullable=False)
     region = db.Column(db.String(100))
-    confidence = db.Column(db.Float, nullable=False)
+    confidence = db.Column(db.String(100), nullable=False)
     disease_name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text, nullable=False)
     symptoms = db.Column(db.Text, nullable=False)
@@ -162,24 +163,168 @@ class Report(db.Model):
         }
 
 
-def is_valid_email(email):
-    # RegEx pattern for email validation
-    pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
-    return re.match(pattern, email) is not None
+class ImageProcessingController:
+    @staticmethod
+    def preprocess_image(image_bytes) -> np.ndarray:
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        image = image.resize((128, 128))
+        image_array = np.array(image) / 255.0
+        return tf.expand_dims(image_array, 0)
 
 
-def is_strong_password(password):
-    # RegEx pattern for strong password validation
-    pattern = r"^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
-    return re.match(pattern, password) is not None
+class DatabaseHandler:
+    def __init__(self, session):
+        self.session = session
+
+    def fetch_report_disease_counts(self):
+        return (
+            self.session.query(
+                Report.region, Report.disease_name, func.count(Report.id)
+            )
+            .group_by(Report.region, Report.disease_name)
+            .all()
+        )
+
+    def fetch_report_region_counts(self):
+        return (
+            self.session.query(Report.region, func.count(Report.region))
+            .group_by(Report.region)
+            .all()
+        )
+
+    def fetch_report_count(self):
+        return self.session.query(Report).count()
+
+    def fetch_report_regional_disease_counts(self):
+        return (
+            self.session.query(
+                Report.disease_name, Report.region, func.count(Report.id)
+            )
+            .group_by(Report.disease_name, Report.region)
+            .all()
+        )
+
+    def add_report(self, report):
+        self.session.add(report)
+        self.session.commit()
+
+class DiseaseClassification:
+    def __init__(self, imageProcessingController):
+        self.imageProcessingController = imageProcessingController
+        self.aiModel = MODEL
+        self.classificationResults = None
+        self.disease = None
+
+    def is_anomaly(self, img):
+        reconstructed_img = AUTOENCODER.predict(img)
+        reconstruction_error = tf.reduce_mean(tf.square(img - reconstructed_img))
+        anomaly_threshold = 0.0009
+        return reconstruction_error > anomaly_threshold
+
+    def classify_disease(self, image_bytes):
+        preprocessed_image = self.imageProcessingController.preprocess_image(
+            image_bytes
+        )
+        if self.is_anomaly(preprocessed_image):
+            classified_disease = "Anomaly"
+            confidence = "0.0"
+            return classified_disease, confidence
+        else:
+            predictions = self.aiModel.predict(preprocessed_image)
+            max_prob = np.max(predictions[0])
+            if max_prob >= 0.5:
+                classified_disease = CLASS_NAMES[np.argmax(predictions[0])]
+                confidence = round(100 * max_prob, 2)
+                return classified_disease, confidence
+            else:
+                classified_disease = "Anomaly"
+                confidence = round(100 * max_prob, 2)
+                return classified_disease, confidence
+
+    def generate_report(self, classification_results, disease):
+        self.classificationResults = classification_results
+        self.disease = disease
+        if classification_results == disease.name:
+            report = {
+                "disease": disease.name,
+                "description": disease.description,
+                "symptoms": disease.symptoms,
+                "treatment": disease.treatment,
+            }
+        return report
+
+    def log_classification_event(self, log):
+        print("Classification Event Log:", log)
+        return log
 
 
-def send_reset_email(user_email, token):
-    reset_link = url_for("reset_password", token=token, _external=True)
+class DataAnalysis:
+    def __init__(self, database_handler):
+        self.database_handler = database_handler
+        self.result = {}
+
+    def analyze_data(self):
+        disease_counts = self.database_handler.fetch_report_disease_counts()
+        region_counts = self.database_handler.fetch_report_region_counts()
+        total_reports = self.database_handler.fetch_report_count()
+        regional_disease_counts = (
+            self.database_handler.fetch_report_regional_disease_counts()
+        )
+
+        self.result["total_reports"] = total_reports
+        self.result["count_by_disease"] = self._count_by_disease(disease_counts)
+        self.result["count_by_region"] = self._count_by_region(region_counts)
+        self.result["prevalence_per_region"] = self._prevalence_per_region(
+            regional_disease_counts
+        )
+
+        return self.result
+
+    def _count_by_disease(self, disease_counts):
+        disease_aggregate = {}
+        for region, disease_name, count in disease_counts:
+            if disease_name not in disease_aggregate:
+                disease_aggregate[disease_name] = 0
+            disease_aggregate[disease_name] += count
+
+        count_by_disease = []
+        for disease_name, count in disease_aggregate.items():
+            result = {
+                "disease_name": disease_name,
+                "count": count,
+                "epidemic": True if count > threshold else False,
+            }
+            count_by_disease.append(result)
+        return count_by_disease
+
+    def _count_by_region(self, region_counts):
+        region_aggregate = {}
+        for region, count in region_counts:
+            if region not in region_aggregate:
+                region_aggregate[region] = 0
+            region_aggregate[region] += count
+        count_by_region = []
+        for region, count in region_aggregate.items():
+            result = {
+                "region": region,
+                "count": count,
+                "epidemic": True if count > threshold else False,
+            }
+            count_by_region.append(result)
+        return count_by_region
+
+    def _prevalence_per_region(self, regional_disease_counts):
+        prevalence_data = {}
+        for disease_name, region, count in regional_disease_counts:
+            if disease_name not in prevalence_data:
+                prevalence_data[disease_name] = []
+            prevalence_data[disease_name].append({"region": region, "count": count})
+        return prevalence_data
+
+
+def send_reset_email(user_email, code):
     msg = Message("Password Reset Request", recipients=[user_email])
-    msg.body = (
-        f"Please click on the following link to reset your password: {reset_link}"
-    )
+    msg.body = f"Please use the following 6 digit code  to reset your password: {code}"
     mail.send(msg)
 
 
@@ -223,6 +368,18 @@ def create_user():
         return jsonify({"message": "Invalid Email"}), 400
 
 
+def is_valid_email(email):
+    # RegEx pattern for email validation
+    pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+    return re.match(pattern, email) is not None
+
+
+def is_strong_password(password):
+    # RegEx pattern for strong password validation
+    pattern = r"^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
+    return re.match(pattern, password) is not None
+
+
 @app.route("/login", methods=["POST"], endpoint="login")
 def login():
     email = request.json["email"]
@@ -232,25 +389,9 @@ def login():
         access_token = create_access_token(
             identity=user.id, additional_claims={"email": email}
         )
-        report_disease_counts = (
-            db.session.query(Report.region, Report.disease_name, func.count(Report.id))
-            .group_by(Report.region, Report.disease_name)
-            .all()
-        )
 
-        # Dictionary to store the prevalence data
-        prevalence_data = []
-        for region, disease_name, count in report_disease_counts:
-            print(count)
-            if user.region == region and count > regional_threshold:
-                updates = {
-                    "disease_name": disease_name,
-                    "count": count,
-                    "epidemic": True,
-                }
-                prevalence_data.append(updates)
-            else:
-                continue
+        reportDiseaseCount = fetchData()
+        diseasePrevalenceData = identifyEpidemicDisease(user, reportDiseaseCount)
 
         return (
             jsonify(
@@ -264,7 +405,7 @@ def login():
                     "zone": user.zone,
                     "region": user.region,
                     "occupation": user.occupation,
-                    "Epidemic Disease": prevalence_data,
+                    "Epidemic Disease": diseasePrevalenceData,
                 }
             ),
             200,
@@ -272,47 +413,109 @@ def login():
     return jsonify({"message": "Invalid username or password"}), 401
 
 
+def fetchData():
+    report_disease_counts = (
+        db.session.query(Report.region, Report.disease_name, func.count(Report.id))
+        .group_by(Report.region, Report.disease_name)
+        .all()
+    )
+    return report_disease_counts
+
+
+def identifyEpidemicDisease(user, diseaseCounts):
+    # Dictionary to store the prevalence data
+    prevalence_data = []
+    for region, disease_name, count in diseaseCounts:
+        print(count)
+        if user.region == region and count > regional_threshold:
+            updates = {
+                "disease_name": disease_name,
+                "count": count,
+                "epidemic": True,
+            }
+            prevalence_data.append(updates)
+        else:
+            continue
+    return prevalence_data
+
+
 @app.route("/forgot-password", methods=["POST"], endpoint="forgot_password")
-@jwt_required()
 def forgot_password():
-    user_id = get_jwt_identity()
     email = request.json["email"]
 
     if is_valid_email(email):
         existing_user = User.query.filter_by(email=email).first()
         if existing_user:
-            if existing_user.id == user_id:
-                reset_token = create_access_token(identity=existing_user.id)
-                send_reset_email(email, reset_token)
-                return (
-                    jsonify({"message": "Reset token has been sent to your email"}),
-                    201,
+            reset_code = random.randint(100000, 999999)
+            expiration_time = datetime.utcnow() + timedelta(hours=1)
+            passwordResetData = PasswordResetCode.query.filter_by(
+                user_id=existing_user.id
+            ).first()
+            if passwordResetData:
+                passwordResetData.code = reset_code
+                passwordResetData.exipration = expiration_time
+            else:
+                password_reset_Code = PasswordResetCode(
+                    code=str(reset_code),
+                    expiration=expiration_time,
+                    user_id=existing_user.id,
                 )
-            return jsonify({"message": "Access denied"}), 403
+                db.session.add(password_reset_Code)
+
+            db.session.commit()
+            send_reset_email(email, reset_code)
+            return (
+                jsonify({"message": "Reset code has been sent to your email"}),
+                201,
+            )
         return jsonify({"message": "Invalid email address"}), 404
     return jsonify({"message": "Invalid form data"}), 400
 
 
 @app.route("/reset-password", methods=["POST"], endpoint="reset_password")
+def reset_password():
+    reset_code = request.json["code"]
+    if not reset_code.isdigit() or len(reset_code) != 6:
+        return jsonify({"error": "Reset code must be exactly 6 digits"}), 400
+
+    else:
+        resetCode = PasswordResetCode.query.filter_by(code=reset_code).first()
+        password = request.json["password"]
+        if resetCode:
+            if resetCode.expiration > datetime.utcnow():
+                user_id = resetCode.user_id
+                user = User.query.get(user_id)
+                if user:
+                    if is_strong_password(password):
+                        user.password = bcrypt.generate_password_hash(password)
+                        db.session.commit()
+                        return jsonify({"message": "Password reset successful"}), 201
+                    else:
+                        return jsonify({"message": "Invalid Password"}), 400
+                else:
+                    return jsonify({"message": "User not found"}), 401
+            else:
+                return jsonify({"message": "The code has expired"}), 401
+        else:
+            return jsonify({"message": "Invalid code"}), 400
+
+
+@app.route("/change-password", methods=["POST"], endpoint="change_password")
 @jwt_required()
 def reset_password():
-    reset_token = request.json["token"]
-    password = request.json["password"]
     user_id = get_jwt_identity()
     user = User.query.get(user_id)
-    try:
-        decoded_token = decode_token(reset_token)
-        print(f"decoded token: {decoded_token}")
-        if decoded_token["sub"] == user.id:
-            user.password = generate_password_hash(password)
+    oldPassowrd = request.json["oldPassword"]
+    if bcrypt.check_password_hash(user.password, oldPassowrd):
+        newPassword = request.json["newPassword"]
+        if is_strong_password(newPassword):
+            user.password = bcrypt.generate_password_hash(newPassword)
             db.session.commit()
-            return jsonify({"message": "Password reset successful"}), 201
+            return jsonify({"message": "Password changed successful"}), 201
         else:
-            return jsonify({"message": "Invalid user"}), 404
-    except InvalidTokenError:
-        return jsonify({"message": "Invalid reset token"}), 400
-    except Exception as e:
-        return jsonify({"message": str(e)}), 500
+            return jsonify({"message": "Invalid Password"}), 400
+    else:
+        return jsonify({"message": "Old password is incorrect"}), 400
 
 
 @app.route("/users", methods=["GET"], endpoint="get_users")
@@ -327,7 +530,8 @@ def get_users():
         user_data["user_id"] = user.id
         user_data["firstName"] = user.firstName
         user_data["lastName"] = user.lastName
-        user_data["phoneNumber"] = user.phoneNumber
+        user_data["email"] = user.email
+        user_data["phoneNumber"] = str(user.phoneNumber)
         user_data["zone"] = user.zone
         user_data["region"] = user.region
         user_data["occupation"] = user.occupation
@@ -350,7 +554,8 @@ def get_user(user_id):
         user_data["user_id"] = user.id
         user_data["firstName"] = user.firstName
         user_data["lastName"] = user.lastName
-        user_data["phoneNumber"] = user.phoneNumber
+        user_data["email"] = user.email
+        user_data["phoneNumber"] = str(user.phoneNumber)
         user_data["zone"] = user.zone
         user_data["region"] = user.region
         user_data["occupation"] = user.occupation
@@ -413,29 +618,30 @@ def coffee_detection():
 
     image_file = request.files["image"]
     if image_file.filename == "":
-        return jsonify({"error": "Invalid image file"}), 400
+        return jsonify({"error": "No selected Image"}), 400
     image_bytes = image_file.read()
-    image_array = read_file_as_image(image_bytes)
-    img_batch = tf.expand_dims(image_array, 0)
+    image_processing_controller = ImageProcessingController()
 
-    if is_anomaly(img_batch):
-        return jsonify({"class": "Anomaly", "confidence": 0.0})
+    image_id, filename = save_image(image_file)
+    disease_classifier = DiseaseClassification(image_processing_controller)
+    classified_disease, confidence = disease_classifier.classify_disease(image_bytes)
+    if classified_disease == "Anomaly":
+        return jsonify(
+            {"class": str(classified_disease), "confidence": str(confidence)}
+        )
+
+    # Create a new report instance
     else:
-        image_id, filename = save_image(image_file)
-        predicted_class, confidence = predict_image_class(img_batch)
-
         # Fetch disease data from the database
-        disease = Disease.query.filter_by(name=predicted_class).first()
+        disease = Disease.query.filter_by(name=classified_disease).first()
         current_time = datetime.datetime.now()
-
-        # Create a new report instance
         report = Report(
             user_id=user_id,
             image_id=os.path.join(image_id + "_" + filename),
             timestamp=current_time,
             region=user.region,
-            disease_name=disease.name,
             confidence=float(confidence),
+            disease_name=disease.name,
             description=disease.description,
             symptoms=disease.symptoms,
             treatment=disease.treatment,
@@ -455,36 +661,6 @@ def coffee_detection():
             "treatment": disease.treatment,
         }
         return jsonify(response_data), 200
-
-
-# Anomaly detection threshold
-def is_anomaly(img):
-    reconstructed_img = AUTOENCODER.predict(img)
-    reconstruction_error = tf.reduce_mean(tf.square(img - reconstructed_img))
-    anomaly_threshold = 0.009
-    return reconstruction_error > anomaly_threshold
-
-
-# Reading Image file
-def read_file_as_image(data) -> np.ndarray:
-    image = Image.open(BytesIO(data)).convert("RGB")
-    image = image.resize((128, 128))
-    imageArray = np.array(image) / 255.0
-    return imageArray
-
-
-# Predicting image class
-def predict_image_class(img):
-    # img_array = tf.expand_dims(img, 0)
-    predictions = MODEL.predict(img)
-    max_prob = np.max(predictions[0])
-    if max_prob >= 0.5:
-        predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
-        confidence = round(100 * max_prob, 2)
-        return predicted_class, confidence
-    else:
-        return jsonify("Anomaly", round(100 * max_prob, 2)), 200
-
 
 def save_image(image_file):
     image_id = str(uuid.uuid4())
@@ -511,62 +687,65 @@ def researcher_page():
     if user.occupation != "Researcher":
         return jsonify({"unauthorized user"}), 403
     else:
-        report_disease_counts = (
-            db.session.query(Report.disease_name, func.count(Report.disease_name))
-            .group_by(Report.disease_name)
-            .all()
-        )
-        # for disease_name, count in report_disease_counts:
+        # report_disease_counts = (
+        #     db.session.query(Report.disease_name, func.count(Report.disease_name))
+        #     .group_by(Report.disease_name)
+        #     .all()
+        # )
+        # # for disease_name, count in report_disease_counts:
 
-        report_region_counts = (
-            db.session.query(Report.region, func.count(Report.region))
-            .group_by(Report.region)
-            .all()
-        )
+        # report_region_counts = (
+        #     db.session.query(Report.region, func.count(Report.region))
+        #     .group_by(Report.region)
+        #     .all()
+        # )
 
         # Get the total count of reports
-        report_count = Report.query.count()
+        # report_count = Report.query.count()
 
-        # Create an array tos tore the results
-        count_by_disease = []
+        # # Create an array tos tore the results
+        # count_by_disease = []
 
         # Iterate over the report counts and add them to the count_by_disease array
-        for disease_name, count in report_disease_counts:
-            result = {
-                "disease_name": disease_name,
-                "count": count,
-                "epidemic": True if count > threshold else False,
-            }
-            count_by_disease.append(result)
+        # for disease_name, count in report_disease_counts:
+        #     result = {
+        #         "disease_name": disease_name,
+        #         "count": count,
+        #         "epidemic": True if count > threshold else False,
+        #     }
+        #     count_by_disease.append(result)
 
         # Iterate over the report counts and add them to the count_by_region array
-        count_by_region = []
+        # count_by_region = []
 
-        for region, count in report_region_counts:
-            results = {"region": region, "count": count}
-            count_by_region.append(results)
+        # for region, count in report_region_counts:
+        #     results = {"region": region, "count": count}
+        #     count_by_region.append(results)
 
-        report_regional_disease_counts = (
-            db.session.query(Report.disease_name, Report.region, func.count(Report.id))
-            .group_by(Report.disease_name, Report.region)
-            .all()
-        )
+        # report_regional_disease_counts = (
+        #     db.session.query(Report.disease_name, Report.region, func.count(Report.id))
+        #     .group_by(Report.disease_name, Report.region)
+        #     .all()
+        # )
         # print(f"reports regional disease {report_regional_disease_counts}")
 
         # Dictionary to store the prevalence data
-        prevalence_data = {}
-        for disease_name, region, count in report_regional_disease_counts:
-            if disease_name not in prevalence_data:
-                prevalence_data[disease_name] = []
-            prevalence_data[disease_name].append({"region": region, "count": count}),
-
+        # prevalence_data = {}
+        # for disease_name, region, count in report_regional_disease_counts:
+        #     if disease_name not in prevalence_data:
+        #         prevalence_data[disease_name] = []
+        #     prevalence_data[disease_name].append({"region": region, "count": count}),
+        database_handler = DatabaseHandler(db.session)
+        data_analysis = DataAnalysis(database_handler)
+        analysis_result = data_analysis.analyze_data()
+        print(analysis_result)
         return (
             jsonify(
                 {
-                    "Total disease Report": report_count,
-                    "Count by disease": count_by_disease,
-                    "Count by region": count_by_region,
-                    "prevalency per region": prevalence_data,
+                    "Total disease Report": analysis_result,
+                    # "Count by disease": analysis_result,
+                    # "Count by region": analysis_result.count_by_region,
+                    # "prevalency per region": analysis_result.prevalence_data,
                 }
             ),
             200,
