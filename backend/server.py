@@ -49,9 +49,7 @@ app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER")
 # write a program
 
 db = SQLAlchemy(app)
-engine = create_engine(
-    "sqlite:///users.db"
-)
+engine = create_engine("sqlite:///users.db")
 Session = sessionmaker(bind=engine)
 session = Session()
 jwt = JWTManager(app)
@@ -145,9 +143,6 @@ class Report(db.Model):
     region = db.Column(db.String(100))
     confidence = db.Column(db.String(100), nullable=False)
     disease_name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text, nullable=False)
-    symptoms = db.Column(db.Text, nullable=False)
-    treatment = db.Column(db.Text, nullable=False)
 
     def to_dict(self):
         return {
@@ -157,9 +152,6 @@ class Report(db.Model):
             "timestamp": self.timestamp,
             "region": self.region,
             "confidence": self.confidence,
-            "description": self.description,
-            "symptoms": self.symptoms,
-            "treatment": self.treatment,
         }
 
 
@@ -208,10 +200,10 @@ class DatabaseHandler:
         self.session.add(report)
         self.session.commit()
 
+
 class DiseaseClassification:
     def __init__(self, imageProcessingController):
         self.imageProcessingController = imageProcessingController
-        self.aiModel = MODEL
         self.classificationResults = None
         self.disease = None
 
@@ -230,7 +222,7 @@ class DiseaseClassification:
             confidence = "0.0"
             return classified_disease, confidence
         else:
-            predictions = self.aiModel.predict(preprocessed_image)
+            predictions = MODEL.predict(preprocessed_image)
             max_prob = np.max(predictions[0])
             if max_prob >= 0.5:
                 classified_disease = CLASS_NAMES[np.argmax(predictions[0])]
@@ -241,21 +233,21 @@ class DiseaseClassification:
                 confidence = round(100 * max_prob, 2)
                 return classified_disease, confidence
 
-    def generate_report(self, classification_results, disease):
-        self.classificationResults = classification_results
-        self.disease = disease
-        if classification_results == disease.name:
-            report = {
-                "disease": disease.name,
-                "description": disease.description,
-                "symptoms": disease.symptoms,
-                "treatment": disease.treatment,
-            }
-        return report
+    # def generate_report(self, classification_results, disease):
+    #     self.classificationResults = classification_results
+    #     self.disease = disease
+    #     if classification_results == disease.name:
+    #         report = {
+    #             "disease": disease.name,
+    #             "description": disease.description,
+    #             "symptoms": disease.symptoms,
+    #             "treatment": disease.treatment,
+    #         }
+    #     return report
 
-    def log_classification_event(self, log):
-        print("Classification Event Log:", log)
-        return log
+    # def log_classification_event(self, log):
+    #     print("Classification Event Log:", log)
+    #     return log
 
 
 class DataAnalysis:
@@ -634,7 +626,7 @@ def coffee_detection():
     else:
         # Fetch disease data from the database
         disease = Disease.query.filter_by(name=classified_disease).first()
-        current_time = datetime.datetime.now()
+        current_time = datetime.utcnow()
         report = Report(
             user_id=user_id,
             image_id=os.path.join(image_id + "_" + filename),
@@ -642,9 +634,6 @@ def coffee_detection():
             region=user.region,
             confidence=float(confidence),
             disease_name=disease.name,
-            description=disease.description,
-            symptoms=disease.symptoms,
-            treatment=disease.treatment,
         )
 
         # Add the report to the database
@@ -661,6 +650,7 @@ def coffee_detection():
             "treatment": disease.treatment,
         }
         return jsonify(response_data), 200
+
 
 def save_image(image_file):
     image_id = str(uuid.uuid4())
@@ -687,67 +677,12 @@ def researcher_page():
     if user.occupation != "Researcher":
         return jsonify({"unauthorized user"}), 403
     else:
-        # report_disease_counts = (
-        #     db.session.query(Report.disease_name, func.count(Report.disease_name))
-        #     .group_by(Report.disease_name)
-        #     .all()
-        # )
-        # # for disease_name, count in report_disease_counts:
-
-        # report_region_counts = (
-        #     db.session.query(Report.region, func.count(Report.region))
-        #     .group_by(Report.region)
-        #     .all()
-        # )
-
-        # Get the total count of reports
-        # report_count = Report.query.count()
-
-        # # Create an array tos tore the results
-        # count_by_disease = []
-
-        # Iterate over the report counts and add them to the count_by_disease array
-        # for disease_name, count in report_disease_counts:
-        #     result = {
-        #         "disease_name": disease_name,
-        #         "count": count,
-        #         "epidemic": True if count > threshold else False,
-        #     }
-        #     count_by_disease.append(result)
-
-        # Iterate over the report counts and add them to the count_by_region array
-        # count_by_region = []
-
-        # for region, count in report_region_counts:
-        #     results = {"region": region, "count": count}
-        #     count_by_region.append(results)
-
-        # report_regional_disease_counts = (
-        #     db.session.query(Report.disease_name, Report.region, func.count(Report.id))
-        #     .group_by(Report.disease_name, Report.region)
-        #     .all()
-        # )
-        # print(f"reports regional disease {report_regional_disease_counts}")
-
-        # Dictionary to store the prevalence data
-        # prevalence_data = {}
-        # for disease_name, region, count in report_regional_disease_counts:
-        #     if disease_name not in prevalence_data:
-        #         prevalence_data[disease_name] = []
-        #     prevalence_data[disease_name].append({"region": region, "count": count}),
         database_handler = DatabaseHandler(db.session)
         data_analysis = DataAnalysis(database_handler)
         analysis_result = data_analysis.analyze_data()
         print(analysis_result)
         return (
-            jsonify(
-                {
-                    "Total disease Report": analysis_result,
-                    # "Count by disease": analysis_result,
-                    # "Count by region": analysis_result.count_by_region,
-                    # "prevalency per region": analysis_result.prevalence_data,
-                }
-            ),
+            jsonify({"Total disease Report": analysis_result}),
             200,
         )
 
