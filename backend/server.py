@@ -60,7 +60,7 @@ MODEL_PATH = "saved_models/coffee3.keras"
 MODEL = tf.keras.models.load_model(MODEL_PATH)
 AUTOENCODER_PATH = "autoencoder/autoencoder2.keras"
 AUTOENCODER = tf.keras.models.load_model(AUTOENCODER_PATH)
-CLASS_NAMES = ["Cerscospora", "Leaf rust", "Miner", "Phoma", "Healthy"]
+CLASS_NAMES = ["Cerscospora", "Healthy", "Leaf rust", "Miner", "Phoma"]
 threshold = 10
 regional_threshold = 3
 
@@ -122,8 +122,8 @@ class PasswordResetCode(db.Model):
 
 
 class Disease(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), unique=True, nullable=False)
+    id = db.Column(db.Integer, nullable=False)
+    name = db.Column(db.String(100), unique=True, primary_key=True, nullable=False)
     description = db.Column(db.Text, nullable=False)
     symptoms = db.Column(db.Text, nullable=False)
     treatment = db.Column(db.Text, nullable=False)
@@ -142,9 +142,12 @@ class Report(db.Model):
     timestamp = db.Column(db.DateTime, nullable=False)
     region = db.Column(db.String(100))
     confidence = db.Column(db.String(100), nullable=False)
-    disease_name = db.Column(db.String(100), nullable=False)
+    disease_name = db.Column(
+        db.String(100), db.ForeignKey("disease.name"), nullable=False
+    )
 
     def to_dict(self):
+        disease = Disease.query.filter_by(name=self.disease_name).first()
         return {
             "user_id": self.user_id,
             "image_id": self.image_id,
@@ -152,6 +155,9 @@ class Report(db.Model):
             "timestamp": self.timestamp,
             "region": self.region,
             "confidence": self.confidence,
+            "description": disease.description if disease else None,
+            "symptoms": disease.symptoms if disease else None,
+            "treatment": disease.treatment if disease else None,
         }
 
 
@@ -275,9 +281,12 @@ class DataAnalysis:
     def _count_by_disease(self, disease_counts):
         disease_aggregate = {}
         for region, disease_name, count in disease_counts:
-            if disease_name not in disease_aggregate:
-                disease_aggregate[disease_name] = 0
-            disease_aggregate[disease_name] += count
+            if disease_name == "Healthy":
+                continue
+            else:
+                if disease_name not in disease_aggregate:
+                    disease_aggregate[disease_name] = 0
+                disease_aggregate[disease_name] += count
 
         count_by_disease = []
         for disease_name, count in disease_aggregate.items():
@@ -308,9 +317,12 @@ class DataAnalysis:
     def _prevalence_per_region(self, regional_disease_counts):
         prevalence_data = {}
         for disease_name, region, count in regional_disease_counts:
-            if disease_name not in prevalence_data:
-                prevalence_data[disease_name] = []
-            prevalence_data[disease_name].append({"region": region, "count": count})
+            if disease_name == "Healthy":
+                continue
+            else:
+                if disease_name not in prevalence_data:
+                    prevalence_data[disease_name] = []
+                prevalence_data[disease_name].append({"region": region, "count": count})
         return prevalence_data
 
 
@@ -406,8 +418,12 @@ def login():
 
 
 def fetchData():
+    # Get the current date
+    current_date = datetime.utcnow()
+    date_30_days_ago = current_date - timedelta(days=30)
     report_disease_counts = (
         db.session.query(Report.region, Report.disease_name, func.count(Report.id))
+        .filter(Report.timestamp >= date_30_days_ago)
         .group_by(Report.region, Report.disease_name)
         .all()
     )
@@ -418,8 +434,12 @@ def identifyEpidemicDisease(user, diseaseCounts):
     # Dictionary to store the prevalence data
     prevalence_data = []
     for region, disease_name, count in diseaseCounts:
-        print(count)
-        if user.region == region and count > regional_threshold:
+        # print(count)
+        if (
+            user.region == region
+            and count > regional_threshold
+            and disease_name != "Healthy"
+        ):
             updates = {
                 "disease_name": disease_name,
                 "count": count,
@@ -439,13 +459,14 @@ def forgot_password():
         existing_user = User.query.filter_by(email=email).first()
         if existing_user:
             reset_code = random.randint(100000, 999999)
-            expiration_time = datetime.utcnow() + timedelta(hours=1)
+            expiration_time = datetime.now() + timedelta(hours=1)
             passwordResetData = PasswordResetCode.query.filter_by(
                 user_id=existing_user.id
             ).first()
             if passwordResetData:
-                passwordResetData.code = reset_code
-                passwordResetData.exipration = expiration_time
+                passwordResetData.code = str(reset_code)
+                passwordResetData.expiration = expiration_time
+                db.session.commit()
             else:
                 password_reset_Code = PasswordResetCode(
                     code=str(reset_code),
@@ -453,8 +474,8 @@ def forgot_password():
                     user_id=existing_user.id,
                 )
                 db.session.add(password_reset_Code)
-
-            db.session.commit()
+                db.session.commit()
+            print(f"password Reset {reset_code}")
             send_reset_email(email, reset_code)
             return (
                 jsonify({"message": "Reset code has been sent to your email"}),
@@ -474,8 +495,11 @@ def reset_password():
         resetCode = PasswordResetCode.query.filter_by(code=reset_code).first()
         password = request.json["password"]
         if resetCode:
-            if resetCode.expiration > datetime.utcnow():
+            print(f"expiration {resetCode.expiration }")
+            print(f"now {datetime.now()}")
+            if resetCode.expiration > datetime.now():
                 user_id = resetCode.user_id
+                print(f"user code {resetCode.user_id}")
                 user = User.query.get(user_id)
                 if user:
                     if is_strong_password(password):
@@ -624,6 +648,7 @@ def coffee_detection():
 
     # Create a new report instance
     else:
+        print(f"found disease {classified_disease}")
         # Fetch disease data from the database
         disease = Disease.query.filter_by(name=classified_disease).first()
         current_time = datetime.utcnow()
@@ -681,8 +706,22 @@ def researcher_page():
         data_analysis = DataAnalysis(database_handler)
         analysis_result = data_analysis.analyze_data()
         print(analysis_result)
+        #  Calculate the average confidence
+        average_confidence = db.session.query(func.avg(Report.confidence)).scalar()
+
+        # Convert the average confidence to a float
+        average_confidence = (
+            float(average_confidence) if average_confidence is not None else 0.0
+        )
+
+        print(f"Average Confidence: {average_confidence}")
         return (
-            jsonify({"Total disease Report": analysis_result}),
+            jsonify(
+                {
+                    "Total disease Report": analysis_result,
+                    "Average Confidence": average_confidence,
+                }
+            ),
             200,
         )
 
