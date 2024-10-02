@@ -394,9 +394,6 @@ def login():
             identity=user.id, additional_claims={"email": email}
         )
 
-        reportDiseaseCount = fetchData()
-        diseasePrevalenceData = identifyEpidemicDisease(user, reportDiseaseCount)
-
         return (
             jsonify(
                 {
@@ -408,48 +405,12 @@ def login():
                     "phoneNumber": str(user.phoneNumber),
                     "zone": user.zone,
                     "region": user.region,
-                    "occupation": user.occupation,
-                    "Epidemic Disease": diseasePrevalenceData,
+                    "occupation": user.occupation
                 }
             ),
             200,
         )
     return jsonify({"message": "Invalid username or password"}), 401
-
-
-def fetchData():
-    # Get the current date
-    current_date = datetime.utcnow()
-    date_30_days_ago = current_date - timedelta(days=30)
-    report_disease_counts = (
-        db.session.query(Report.region, Report.disease_name, func.count(Report.id))
-        .filter(Report.timestamp >= date_30_days_ago)
-        .group_by(Report.region, Report.disease_name)
-        .all()
-    )
-    return report_disease_counts
-
-
-def identifyEpidemicDisease(user, diseaseCounts):
-    # Dictionary to store the prevalence data
-    prevalence_data = []
-    for region, disease_name, count in diseaseCounts:
-        # print(count)
-        if (
-            user.region == region
-            and count > regional_threshold
-            and disease_name != "Healthy"
-        ):
-            updates = {
-                "disease_name": disease_name,
-                "count": count,
-                "epidemic": True,
-            }
-            prevalence_data.append(updates)
-        else:
-            continue
-    return prevalence_data
-
 
 @app.route("/forgot-password", methods=["POST"], endpoint="forgot_password")
 def forgot_password():
